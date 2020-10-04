@@ -1,2 +1,2 @@
 # lande_installer
-Installer automatico per PW NWN Lande di Faerun
+Installer automatico per shard NWN Lande di Faerun
