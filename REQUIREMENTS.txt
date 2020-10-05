@@ -1,6 +1,6 @@
 bs4
 mega.py
 pick
-pyunpack
+patool
 wget
 pyinstaller

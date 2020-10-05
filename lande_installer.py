@@ -140,10 +140,10 @@ def install(archive_path: str, dest_path: str) -> bool:
         for root, _, files in os.walk(tmp_dir):
             for f in files:
                 ftmp = os.path.join(root, f)
-                os.chmod(ftmp, stat.S_IWRITE)  # Fix permissions
+                os.chmod(ftmp, os.stat(ftmp).st_mode | stat.S_IWRITE)  # Fix permissions
                 fdst = os.path.join(dest_path, f)
                 shutil.move(ftmp, fdst)
-                os.chmod(fdst, stat.S_IWRITE)
+                os.chmod(fdst, os.stat(fdst).st_mode | stat.S_IWRITE)  # Fix permissions
 
         print("Archivio estratto correttamente: %s\n" % archive_path)
         return True
