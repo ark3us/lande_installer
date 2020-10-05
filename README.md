@@ -11,7 +11,7 @@ pip install -r REQUIREMENTS.txt
 python lande_installer.py
 ```
 
-# Creazione dell'eseguibile
+## Creazione dell'eseguibile
 
 Copiare il file `hook-patoolib.py` in:
 
