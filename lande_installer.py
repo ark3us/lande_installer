@@ -5,14 +5,14 @@
     Date last modified: 10/04/2020
     Python Version: 3.8
 '''
-
-import shutil
-import simplejson as json
+import logging
 import mega
 import os
 import requests
 import pick
 import patoolib
+import shutil
+import simplejson as json
 import stat
 import tempfile
 import traceback
@@ -43,6 +43,13 @@ SKIP = [
     "NWNclient",
     "goog.gl",
 ]
+ERROR_FLAG = False
+
+
+def set_error():
+    global ERROR_FLAG
+    ERROR_FLAG = True
+    logging.error(traceback.format_exc())
 
 
 def save_info(archive_path: str, info: dict):
@@ -53,7 +60,7 @@ def save_info(archive_path: str, info: dict):
         with open(info_file, "w") as fp:
             json.dump(info, fp)
     except:
-        traceback.print_exc()
+        set_error()
 
 
 def check_install(url: str, archive_path: str) -> Tuple[bool, dict]:
@@ -67,27 +74,33 @@ def check_install(url: str, archive_path: str) -> Tuple[bool, dict]:
             "Content-Length": res.headers.get("Content-Length"),
         }
 
-        if not os.path.exists(archive_path):
-            print("Il file non è presente:", url)
+        if not os.path.exists(archive_path) and not os.path.exists(info_file):
+            print("Non è presente nè il file nè i metadati:", url)
             return False, new_info
             
-        file_size = os.path.getsize(archive_path)
-        # If the file aready exists, just check the length
-        if not os.path.exists(info_file) and str(file_size) == str(new_info.get("Content-Length")):
-            print("Nessuna descrizione trovata, ma file già scaricato:", url)
-            return True, new_info
+        elif os.path.exists(archive_path) and not os.path.exists(info_file):
+            file_size = os.path.getsize(archive_path)
+            # If the file aready exists, just check the length
+            if str(file_size) == str(new_info.get("Content-Length")):
+                print("Metadati non trovati, ma file già scaricato:", url)
+                return True, new_info
+            else:
+                print("Metadati non trovati e file obsoleto:", url)
+                return False, new_info
         
-        with open(info_file) as fp:
-            info = json.load(fp)
+        elif os.path.exists(info_file):
+            with open(info_file) as fp:
+                info = json.load(fp)
 
-        if new_info.get("Last-Modified") == info.get("Last-Modified") and new_info.get("Content-Length") == info.get("Content-Length"):
-            print("File già scaricato:", url)
-            return True, new_info
-        else:
-            print("Trovato update per il file:", url)
-            return False, new_info
+            if new_info.get("Last-Modified") == info.get("Last-Modified") and new_info.get("Content-Length") == info.get("Content-Length"):
+                print("Il file è già all'ultima versione:", url)
+                return True, new_info
+            else:
+                print("Trovato update per il file:", url)
+                return False, new_info
+
     except:
-        traceback.print_exc()
+        set_error()
         return False, None
 
 
@@ -106,7 +119,7 @@ def download(url: str, archive_path: str) -> bool:
         print("Archivio scaricato correttamente: %s" % archive_path)
         return True
     except:
-        traceback.print_exc()
+        set_error()
         return False
 
 
@@ -135,7 +148,7 @@ def install(archive_path: str, dest_path: str) -> bool:
         print("Archivio estratto correttamente: %s\n" % archive_path)
         return True
     except:
-        traceback.print_exc()
+        set_error()
         return False
     finally:
         shutil.rmtree(tmp_dir)
@@ -172,9 +185,12 @@ def install_haks(soup: BeautifulSoup, force=False):
         if is_installed and not force:
             print("Archivio già installato: %s" % href)
             save_info(archive_path, info)
+            if os.path.exists(archive_path):
+                print("Elimino l'archivio")
+                os.remove(archive_path)
             continue
         
-        if not is_installed:
+        if not is_installed or not os.path.exists(archive_path):
             if not download(href, archive_path):
                 print("Errore nello scaricamento dell'archivio: %s" % href)
                 if check_continue():
@@ -188,8 +204,12 @@ def install_haks(soup: BeautifulSoup, force=False):
                 continue
             else:
                 break
-
+            
+        print("Salvo i metadati")
         save_info(archive_path, info)
+        if os.path.exists(archive_path):
+            print("Elimino l'archivio")
+            os.remove(archive_path)
 
 
 def install_nwnclient(force=False):
@@ -209,7 +229,7 @@ def install_nwnclient(force=False):
         print("Archivio estratto correttamente: %s\n" % archive_path)
         return True
     except:
-        traceback.print_exc()
+        set_error()
         return False
 
 def install_nwncx(force=False):
@@ -221,6 +241,8 @@ def install_nwncx(force=False):
 
 
 def main():
+    logging.basicConfig(filename='error.log',level=logging.INFO)
+
     res = requests.get(BASE_URL)
     soup = BeautifulSoup(res.content, features="html.parser")
 
@@ -242,7 +264,7 @@ def main():
 
     reinstall = False
     title = "Desideri installare/reinstallare tutto o soltanto controllare eventuali update?"
-    options = ["Controlla update", "Installa/reinstalla"]
+    options = ["Controlla update", "Installa/reinstalla <- scegliere in caso di prima installazione"]
     _, index = pick.pick(options, title)
     if index == 1:
         reinstall = True
@@ -271,10 +293,15 @@ def main():
             install_nwncx(reinstall)
 
     except:
-        traceback.format_exc()
+        set_error()
 
     finally:
-        input("\n\nOperazione completata. Premere invio per terminare...")
+        if not ERROR_FLAG:
+            input("\n\nOperazione completata con successo.\n"
+                  "Premere invio per terminare...")
+        else:
+            input("\n\nOperazione completata con errori. Inviare il file error.log allo sviluppatore.\n"
+                  "Premere invio per terminare...")
 
 
 if __name__ == "__main__":
