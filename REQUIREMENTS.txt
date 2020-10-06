@@ -4,3 +4,4 @@ pick
 patool
 wget
 pyinstaller
+pysimplegui

@@ -5,21 +5,25 @@
     Date last modified: 10/04/2020
     Python Version: 3.8
 '''
+import io
 import logging
 import mega
 import os
 import requests
-import pick
 import patoolib
+import PySimpleGUI as sg
 import shutil
 import simplejson as json
 import stat
+import sys
 import tempfile
+import threading
 import traceback
 import wget
 from bs4 import BeautifulSoup
 from typing import Tuple
 
+SETTINGS = "settings.json"
 BASE_URL = "http://5.9.105.28"
 NWNCLIENT_URL = "http://5.9.105.28/customdownload/client/NWNclient.zip"
 NWNCX_URL = "https://mega.nz/file/x1g2TA4J#BFB2U9fRx0N8LqlEA5133Rhlxx7k0DYukCQWotLm3no"
@@ -44,11 +48,20 @@ SKIP = [
     "goog.gl",
 ]
 ERROR_FLAG = False
+THREAD_EVENT = "LOG"
+WINDOW = None
+
+
+def print_log(*argv):
+    print(*argv)
+    if WINDOW:
+        WINDOW.write_event_value(THREAD_EVENT, (" ".join(argv),))
 
 
 def set_error():
     global ERROR_FLAG
     ERROR_FLAG = True
+    print_log(traceback.format_exc())
     logging.error(traceback.format_exc())
 
 
@@ -75,17 +88,17 @@ def check_install(url: str, archive_path: str) -> Tuple[bool, dict]:
         }
 
         if not os.path.exists(archive_path) and not os.path.exists(info_file):
-            print("Non è presente nè il file nè i metadati:", url)
+            print_log("Non è presente nè il file nè i metadati:", url)
             return False, new_info
             
         elif os.path.exists(archive_path) and not os.path.exists(info_file):
             file_size = os.path.getsize(archive_path)
             # If the file aready exists, just check the length
             if str(file_size) == str(new_info.get("Content-Length")):
-                print("Metadati non trovati, ma file già scaricato:", url)
+                print_log("Metadati non trovati, ma file già scaricato:", url)
                 return True, new_info
             else:
-                print("Metadati non trovati e file obsoleto:", url)
+                print_log("Metadati non trovati e file obsoleto:", url)
                 return False, new_info
         
         elif os.path.exists(info_file):
@@ -93,10 +106,10 @@ def check_install(url: str, archive_path: str) -> Tuple[bool, dict]:
                 info = json.load(fp)
 
             if new_info.get("Last-Modified") == info.get("Last-Modified") and new_info.get("Content-Length") == info.get("Content-Length"):
-                print("Il file è già all'ultima versione:", url)
+                print_log("Il file è già all'ultima versione:", url)
                 return True, new_info
             else:
-                print("Trovato update per il file:", url)
+                print_log("Trovato update per il file:", url)
                 return False, new_info
 
     except:
@@ -105,7 +118,7 @@ def check_install(url: str, archive_path: str) -> Tuple[bool, dict]:
 
 
 def download(url: str, archive_path: str) -> bool:
-    print("Scaricando %s -> %s ..." % (url, archive_path))
+    print_log("Scaricando %s -> %s ..." % (url, archive_path))
     try:
         if os.path.exists(archive_path):
             shutil.move(archive_path, os.path.join(DOWNLOAD_OLD, os.path.basename(archive_path)))
@@ -115,8 +128,8 @@ def download(url: str, archive_path: str) -> bool:
             m.download_url(url, dest_filename=archive_path)
         else:
             wget.download(url, out=archive_path)
-            print("\n")
-        print("Archivio scaricato correttamente: %s" % archive_path)
+            print_log("\n")
+        print_log("Archivio scaricato correttamente: %s" % archive_path)
         return True
     except:
         set_error()
@@ -133,7 +146,7 @@ def get_dest_path(url: str) -> str:
 
 
 def install(archive_path: str, dest_path: str) -> bool:
-    print("Estrazione: %s -> %s" % (archive_path, dest_path))
+    print_log("Estrazione: %s -> %s" % (archive_path, dest_path))
     tmp_dir = tempfile.mkdtemp()
     try:
         patoolib.extract_archive(archive_path, verbosity=1, outdir=tmp_dir, interactive=False)
@@ -145,7 +158,7 @@ def install(archive_path: str, dest_path: str) -> bool:
                 shutil.move(ftmp, fdst)
                 os.chmod(fdst, os.stat(fdst).st_mode | stat.S_IWRITE)  # Fix permissions
 
-        print("Archivio estratto correttamente: %s\n" % archive_path)
+        print_log("Archivio estratto correttamente: %s\n" % archive_path)
         return True
     except:
         set_error()
@@ -154,61 +167,52 @@ def install(archive_path: str, dest_path: str) -> bool:
         shutil.rmtree(tmp_dir)
 
 
-def check_continue():
-    title = "Si è verificato un errore. Vuoi continuare?"
-    options = ["Si", "No"]
-    _, index = pick.pick(options, title)
-    return index == 0
-
-
-def install_haks(soup: BeautifulSoup, force=False):
+def install_haks(soup: BeautifulSoup, force=False, dry_run=False):
     for a in soup.findAll("a"):
         href = a.get("href")
         if not href:
             continue            
         if any(s in href for s in SKIP):
-            print("\nOmesso: %s" % href)
+            print_log("\nOmesso: %s" % href)
             continue
         if not any(href.endswith(ext) for ext in ALLOWED_ARCHIVES):
-            print("\nLink non supportato: %s" % href)
+            print_log("\nLink non supportato: %s" % href)
             continue
 
-        print("\nArchivio: %s" % href)
+        print_log("\nArchivio: %s" % href)
         archive_path = os.path.join(DOWNLOAD_PATH, href.split("/")[-1])
 
         dest_path = get_dest_path(href)
         if not dest_path:
-            print("Errore: Link non riconosciuto: %s" % href)
+            print_log("Errore: Link non riconosciuto: %s" % href)
             continue
 
         is_installed, info = check_install(href, archive_path)
         if is_installed and not force:
-            print("Archivio già installato: %s" % href)
-            save_info(archive_path, info)
-            if os.path.exists(archive_path):
-                print("Elimino l'archivio")
-                os.remove(archive_path)
+            print_log("Archivio già installato: %s" % href)
+            if not dry_run:
+                save_info(archive_path, info)
+                if os.path.exists(archive_path):
+                    print_log("Elimino l'archivio")
+                    os.remove(archive_path)
             continue
         
         if not is_installed or not os.path.exists(archive_path):
-            if not download(href, archive_path):
-                print("Errore nello scaricamento dell'archivio: %s" % href)
-                if check_continue():
-                    continue
-                else:
-                    break
+            if dry_run:
+                print_log("Richiesto download e installazione dell'archivio:", href)
+                continue
+            elif not download(href, archive_path):
+                print_log("Errore nello scaricamento dell'archivio: %s" % href)
+                break
 
         if not install(archive_path, dest_path):
-            print("Errore nell'installazione dell'archivio: %s" % href)
-            if check_continue():
-                continue
-            else:
-                break
+            print_log("Errore nell'installazione dell'archivio: %s" % href)
+            break
             
-        print("Salvo i metadati")
+        print_log("Salvo i metadati")
         save_info(archive_path, info)
         if os.path.exists(archive_path):
-            print("Elimino l'archivio")
+            print_log("Elimino l'archivio")
             os.remove(archive_path)
 
 
@@ -216,35 +220,33 @@ def install_nwnclient(force=False):
     archive_path = os.path.join(DOWNLOAD_PATH, NWNCLIENT_URL.split("/")[-1])
     is_installed, info = check_install(NWNCLIENT_URL, archive_path)
     if is_installed and not force:
-        print("NWNclient già installato\n")
+        print_log("NWNclient già installato\n")
         save_info(archive_path, info)
         return
     if not is_installed:
         if not download(NWNCLIENT_URL, archive_path):
-            print("Errore nello scaricamento del client: %s" % NWNCLIENT_URL)
+            print_log("Errore nello scaricamento del client: %s" % NWNCLIENT_URL)
             return
     try:
-        print("Estrazione: %s -> %s" % (archive_path, SCRIPT_PATH))
+        print_log("Estrazione: %s -> %s" % (archive_path, SCRIPT_PATH))
         patoolib.extract_archive(archive_path, verbosity=1, outdir=SCRIPT_PATH, interactive=False)
-        print("Archivio estratto correttamente: %s\n" % archive_path)
+        print_log("Archivio estratto correttamente: %s\n" % archive_path)
         return True
     except:
         set_error()
         return False
 
+
 def install_nwncx(force=False):
     archive_path = os.path.join(DOWNLOAD_PATH, "nwncx_lande_240615.7z")
     if not download(NWNCX_URL, archive_path):
-        print("Errore nello scaricamento di nwncx: %s" % NWNCX_URL)
+        print_log("Errore nello scaricamento di nwncx: %s" % NWNCX_URL)
         return
     return install(archive_path, MAIN_PATH)
 
 
 def main():
     logging.basicConfig(filename='error.log',level=logging.INFO)
-
-    res = requests.get(BASE_URL)
-    soup = BeautifulSoup(res.content, features="html.parser")
 
     for _, val in SUBPATHS.items():
         if not os.path.exists(val):
@@ -253,43 +255,120 @@ def main():
     if not os.path.exists(DOWNLOAD_OLD):
         os.makedirs(DOWNLOAD_OLD)
 
+    settings = {
+        "dialog": "Italiano",
+        "mode": "Update",
+        "downloads_path": DOWNLOAD_PATH,
+        "nwnclient_path": MAIN_PATH,
+        "nwnclient": False,
+        "nwncx": True,
+    }
+
+    if os.path.exists(SETTINGS):
+        try:
+            with open(SETTINGS) as fp:
+                settings = json.load(fp)
+        except:
+            print_log("Errore nell'apertura del file di configurazione.")
+            os.remove(SETTINGS)
+
+    sg.theme("DarkAmber")
+    layout = [
+        [sg.Text("--- Dialog ---")],
+        [sg.Text("Lingua del client: "), sg.DropDown(["Italiano", "Inglese"], default_value=settings["dialog"])],
+        [sg.Text("")],
+        [sg.Text("--- Modalità di funzionamento ---")],
+        [sg.Text("Modalità update: controlla se ci sono nuovi contenuti custom")],
+        [sg.Text("Modalità (re)installazione: (re)installa tutto <- scegliere in caso di prima installazione")],
+        [sg.Text("Modalità:"), sg.DropDown(["Update", "(Re)Installazione"], default_value=settings["mode"])],
+        [sg.Text("")],
+        [sg.Text("--- Cache ---")],
+        [sg.Text("Directory contenente i download/metadati:")],
+        [sg.InputText(settings["downloads_path"]), sg.FolderBrowse()],
+        [sg.Text("")],
+        [sg.Text("--- NWN client ---")],
+        [sg.Text("Directory dove è installato o dove installare il client NWN:")],
+        [sg.InputText(settings["nwnclient_path"]), sg.FolderBrowse()],
+        [sg.Checkbox("Installare il client NWN?")],
+        [sg.Text("")],
+        [sg.Text("--- NWNCX ---")],
+        [sg.Checkbox("Installare NWNCX?", default=settings["nwncx"])],
+        [sg.Text("")],
+        [sg.Button("Controlla stato"), sg.Button("Inizia update!")],
+        [sg.Text("")],
+        [sg.Text("--- Log ---")],
+        [sg.Multiline(size=(150, 20), autoscroll=True, disabled=True, key="LOG")],
+        [sg.Button("Pulisci console")],
+    ]
+
+    global WINDOW
+    WINDOW = sg.Window("Lande Installer & Updater", layout)
+    while True:
+        event, values = WINDOW.read()
+        if event == sg.WIN_CLOSED:
+            break
+
+        settings["dialog"] = values[0]
+        settings["mode"] = values[1]
+        settings["downloads_path"] = values[2]
+        settings["nwnclient_path"] = values[3]
+        settings["nwnclient"] = values[4]
+        settings["nwncx"] = values[5]
+
+        with open(SETTINGS, "w") as fp:
+            json.dump(settings, fp)
+
+        if event == THREAD_EVENT:
+            WINDOW["LOG"].print(values[THREAD_EVENT][0])
+        elif event == "Inizia update!":
+            WINDOW["LOG"]("")
+            th = threading.Thread(target=start, args=(settings,))
+            th.daemon = True
+            th.start()
+        elif event == "Controlla stato":
+            WINDOW["LOG"]("")
+            th = threading.Thread(target=start, args=(settings, True,))
+            th.daemon = True
+            th.start()
+        elif event == "Pulisci console":
+            WINDOW["LOG"]("")
+
+
+def start(settings: list, dry_run=False):
+    res = requests.get(BASE_URL)
+    soup = BeautifulSoup(res.content, features="html.parser")
+
     global SKIP
-    title = "Lingua del client:"
-    options = ["Italiano", "Inglese"]
-    _, index = pick.pick(options, title)
-    if index == 0:
+    if settings["dialog"] == "Italiano":
         SKIP.append("dialog_eng")
     else:
         SKIP.append("dialog_ita")
 
     reinstall = False
-    title = "Desideri installare/reinstallare tutto o soltanto controllare eventuali update?"
-    options = ["Controlla update", "Installa/reinstalla <- scegliere in caso di prima installazione"]
-    _, index = pick.pick(options, title)
-    if index == 1:
+    if settings["mode"] != "Update":
         reinstall = True
 
+    global DOWNLOAD_PATH
+    DOWNLOAD_PATH = settings["downloads_path"]
+
+    global MAIN_PATH
+    MAIN_PATH = settings["nwnclient_path"]
+
     install_client = False
-    title = "Vuoi installare il client nwn?"
-    options = ["No, scarica/installa soltanto gli hak", "Si, scarica/installa nella cartella corrente"]
-    _, index = pick.pick(options, title)
-    if index == 1:
+    if settings["nwnclient"] == True:
         install_client = True
 
     install_cx = False
-    title = "Vuoi installare NWNCX?"
-    options = ["Si, scarica/installa", "No"]
-    _, index = pick.pick(options, title)
-    if index == 0:
+    if settings["nwncx"] == True:
         install_cx = True
 
     try:
-        if install_client:
+        if install_client and not dry_run:
             install_nwnclient(reinstall)
         
-        install_haks(soup, force=reinstall)
+        install_haks(soup, force=reinstall, dry_run=dry_run)
         
-        if install_cx:
+        if install_cx and not dry_run:
             install_nwncx(reinstall)
 
     except:
@@ -297,11 +376,9 @@ def main():
 
     finally:
         if not ERROR_FLAG:
-            input("\n\nOperazione completata con successo.\n"
-                  "Premere invio per terminare...")
+            print_log("\n\nOperazione completata con successo.\n")
         else:
-            input("\n\nOperazione completata con errori. Inviare il file error.log allo sviluppatore.\n"
-                  "Premere invio per terminare...")
+            print_log("\n\nOperazione completata con errori. Inviare il file error.log allo sviluppatore.\n")
 
 
 if __name__ == "__main__":
