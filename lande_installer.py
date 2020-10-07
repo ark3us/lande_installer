@@ -8,7 +8,8 @@
     Python Version: 3.8
 '''
 
-import io
+import datetime
+import dateutil.parser
 import logging
 import mega
 import os
@@ -184,7 +185,7 @@ def install(archive_path: str, dest_path: str) -> bool:
         shutil.rmtree(tmp_dir)
 
 
-def install_haks(soup: BeautifulSoup, force=False, dry_run=False, baseline=False) -> int:
+def install_haks(soup: BeautifulSoup, force=False, dry_run=False, baseline=False, days_offset=0) -> int:
     updates = 0
     for a in soup.findAll("a"):
         href = a.get("href")
@@ -216,11 +217,17 @@ def install_haks(soup: BeautifulSoup, force=False, dry_run=False, baseline=False
             continue
         
         if not is_installed or not os.path.exists(archive_path):
-            if dry_run:
-                if baseline:
+            if baseline:
+                file_dt = dateutil.parser.parse(info["Last-Modified"]).replace(tzinfo=None)
+                now = datetime.datetime.now()
+                if (now - file_dt) > datetime.timedelta(days=days_offset):
                     print_log("Richiesto salvataggio metadati:", href)
                 else:
-                    print_log("Richiesto download e installazione dell'archivio:", href)
+                    print_log("Update disponibile:", href)
+                    updates += 1
+                    continue
+            elif dry_run:
+                print_log("Richiesto download e installazione dell'archivio:", href)
                 updates += 1
             elif not download(href, archive_path):
                 print_log("Errore nello scaricamento dell'archivio: %s" % href)
@@ -326,7 +333,8 @@ def main():
         [sg.Text("")],
         [sg.Text("--- Sincronizzazione ---")],
         [sg.Text("Se è la prima volta che usi questa applicazione e hai già tutto installato,")],
-        [sg.Text("allora utilizza questa funzione per sincronizzare i contenuti: "), sg.Button("Sincronizza")],
+        [sg.Text("allora utilizza la seguente funzione per sincronizzare i contenuti.")],
+        [sg.Text("Non sincronizzare contenuti più nuovi di giorni: "), sg.DropDown(list(range(1, 30)), default_value=1, size=(3, 1)), sg.Button("Sincronizza")],
     ]
 
     col2 = [
@@ -365,17 +373,18 @@ def main():
     WINDOW = sg.Window("Lande Installer & Updater", layout, finalize=True, auto_size_text=True, auto_size_buttons=True, resizable=True)
     while True:
         event, values = WINDOW.read()
-        # print(values)
+        # print(event, values)
         if event == sg.WIN_CLOSED:
             break
 
         settings["dialog"] = values[0]
         settings["mode"] = values[1]
-        settings["downloads_path"] = values[3]
-        settings["nwnclient_path"] = values[4]
-        settings["nwnclient"] = values[5]
+        settings["days"] = values[2]
+        settings["downloads_path"] = values[4]
+        settings["nwnclient_path"] = values[5]
+        settings["nwnclient"] = values[6]
         settings["nwncx"] = values[7]
-        settings["verbosity"] = int(values[7])
+        settings["verbosity"] = int(values[8])
 
         with open(SETTINGS, "w") as fp:
             json.dump(settings, fp)
@@ -419,6 +428,8 @@ def start(settings: list, dry_run=False, baseline=False):
     if settings["mode"] != "Update":
         reinstall = True
 
+    days_offset = settings["days"]
+
     global DOWNLOAD_PATH
     DOWNLOAD_PATH = settings["downloads_path"]
 
@@ -443,12 +454,11 @@ def start(settings: list, dry_run=False, baseline=False):
         if install_client and not dry_run:
             install_nwnclient(reinstall)
         
-        updates = install_haks(soup, force=reinstall, dry_run=dry_run, baseline=baseline)
-        if not baseline:
-            if dry_run:
-                popup("Update disponibili: %s" % updates)
-            else:
-                popup("Update installati: %s" % updates)
+        updates = install_haks(soup, force=reinstall, dry_run=dry_run, baseline=baseline, days_offset=days_offset)
+        if dry_run:
+            popup("Update disponibili: %s" % updates)
+        else:
+            popup("Update installati: %s" % updates)
         
         if install_cx and not dry_run:
             install_nwncx(reinstall)
