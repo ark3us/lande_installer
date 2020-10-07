@@ -7,6 +7,7 @@
 '''
 import io
 import logging
+from PySimpleGUI.PySimpleGUI import Column, VerticalSeparator
 import mega
 import os
 import requests
@@ -15,15 +16,15 @@ import PySimpleGUI as sg
 import shutil
 import simplejson as json
 import stat
-import sys
 import tempfile
 import threading
 import traceback
 import wget
 from bs4 import BeautifulSoup
-from typing import Tuple
+from typing import Text, Tuple
 
 SETTINGS = "settings.json"
+VERBOSITY = 1
 BASE_URL = "http://5.9.105.28"
 NWNCLIENT_URL = "http://5.9.105.28/customdownload/client/NWNclient.zip"
 NWNCX_URL = "https://mega.nz/file/x1g2TA4J#BFB2U9fRx0N8LqlEA5133Rhlxx7k0DYukCQWotLm3no"
@@ -52,9 +53,10 @@ THREAD_EVENT = "LOG"
 WINDOW = None
 
 
-def print_log(*argv):
+def print_log(*argv, level=1):
     print(*argv)
-    if WINDOW:
+
+    if VERBOSITY >= level and WINDOW:
         WINDOW.write_event_value(THREAD_EVENT, (" ".join(argv),))
 
 
@@ -88,17 +90,17 @@ def check_install(url: str, archive_path: str) -> Tuple[bool, dict]:
         }
 
         if not os.path.exists(archive_path) and not os.path.exists(info_file):
-            print_log("Non è presente nè il file nè i metadati:", url)
+            print_log("Non è presente nè il file nè i metadati:", url, level=2)
             return False, new_info
             
         elif os.path.exists(archive_path) and not os.path.exists(info_file):
             file_size = os.path.getsize(archive_path)
             # If the file aready exists, just check the length
             if str(file_size) == str(new_info.get("Content-Length")):
-                print_log("Metadati non trovati, ma file già scaricato:", url)
+                print_log("Metadati non trovati, ma file già scaricato:", url, level=2)
                 return True, new_info
             else:
-                print_log("Metadati non trovati e file obsoleto:", url)
+                print_log("Metadati non trovati e file obsoleto:", url, level=2)
                 return False, new_info
         
         elif os.path.exists(info_file):
@@ -106,7 +108,7 @@ def check_install(url: str, archive_path: str) -> Tuple[bool, dict]:
                 info = json.load(fp)
 
             if new_info.get("Last-Modified") == info.get("Last-Modified") and new_info.get("Content-Length") == info.get("Content-Length"):
-                print_log("Il file è già all'ultima versione:", url)
+                print_log("Il file è già all'ultima versione:", url, level=2)
                 return True, new_info
             else:
                 print_log("Trovato update per il file:", url)
@@ -128,7 +130,7 @@ def download(url: str, archive_path: str) -> bool:
             m.download_url(url, dest_filename=archive_path)
         else:
             wget.download(url, out=archive_path)
-            print_log("\n")
+            print("\n")
         print_log("Archivio scaricato correttamente: %s" % archive_path)
         return True
     except:
@@ -158,7 +160,7 @@ def install(archive_path: str, dest_path: str) -> bool:
                 shutil.move(ftmp, fdst)
                 os.chmod(fdst, os.stat(fdst).st_mode | stat.S_IWRITE)  # Fix permissions
 
-        print_log("Archivio estratto correttamente: %s\n" % archive_path)
+        print_log("Archivio estratto correttamente: %s" % archive_path)
         return True
     except:
         set_error()
@@ -173,10 +175,10 @@ def install_haks(soup: BeautifulSoup, force=False, dry_run=False):
         if not href:
             continue            
         if any(s in href for s in SKIP):
-            print_log("\nOmesso: %s" % href)
+            print_log("\nOmesso: %s" % href, level=2)
             continue
         if not any(href.endswith(ext) for ext in ALLOWED_ARCHIVES):
-            print_log("\nLink non supportato: %s" % href)
+            print_log("\nLink non supportato: %s" % href, level=2)
             continue
 
         print_log("\nArchivio: %s" % href)
@@ -189,11 +191,11 @@ def install_haks(soup: BeautifulSoup, force=False, dry_run=False):
 
         is_installed, info = check_install(href, archive_path)
         if is_installed and not force:
-            print_log("Archivio già installato: %s" % href)
+            print_log("Contenuto già installato: %s" % href)
             if not dry_run:
                 save_info(archive_path, info)
                 if os.path.exists(archive_path):
-                    print_log("Elimino l'archivio")
+                    print_log("Elimino l'archivio", level=2)
                     os.remove(archive_path)
             continue
         
@@ -209,10 +211,10 @@ def install_haks(soup: BeautifulSoup, force=False, dry_run=False):
             print_log("Errore nell'installazione dell'archivio: %s" % href)
             break
             
-        print_log("Salvo i metadati")
+        print_log("Salvo i metadati", level=2)
         save_info(archive_path, info)
         if os.path.exists(archive_path):
-            print_log("Elimino l'archivio")
+            print_log("Elimino l'archivio", level=2)
             os.remove(archive_path)
 
 
@@ -262,6 +264,7 @@ def main():
         "nwnclient_path": MAIN_PATH,
         "nwnclient": False,
         "nwncx": True,
+        "verbosity": 1,
     }
 
     if os.path.exists(SETTINGS):
@@ -273,7 +276,9 @@ def main():
             os.remove(SETTINGS)
 
     sg.theme("DarkAmber")
-    layout = [
+
+
+    col1 = [
         [sg.Text("--- Dialog ---")],
         [sg.Text("Lingua del client: "), sg.DropDown(["Italiano", "Inglese"], default_value=settings["dialog"])],
         [sg.Text("")],
@@ -282,6 +287,9 @@ def main():
         [sg.Text("Modalità (re)installazione: (re)installa tutto <- scegliere in caso di prima installazione")],
         [sg.Text("Modalità:"), sg.DropDown(["Update", "(Re)Installazione"], default_value=settings["mode"])],
         [sg.Text("")],
+    ]
+
+    col2 = [
         [sg.Text("--- Cache ---")],
         [sg.Text("Directory contenente i download/metadati:")],
         [sg.InputText(settings["downloads_path"]), sg.FolderBrowse()],
@@ -292,28 +300,34 @@ def main():
         [sg.Checkbox("Installare il client NWN?")],
         [sg.Text("")],
         [sg.Text("--- NWNCX ---")],
-        [sg.Checkbox("Installare NWNCX?", default=settings["nwncx"])],
+        [sg.Checkbox(" Installare NWNCX?", default=settings["nwncx"])],
         [sg.Text("")],
+    ]
+
+    layout = [
+        [sg.Column(col1), sg.VerticalSeparator(), sg.Column(col2)],
         [sg.Button("Controlla stato"), sg.Button("Inizia update!")],
         [sg.Text("")],
-        [sg.Text("--- Log ---")],
+        [sg.Text("--- Log ---    "), sg.Text("Verbosità: "), sg.DropDown(["1", "2"], size=(3, 1), default_value="1")],
         [sg.Multiline(size=(150, 20), autoscroll=True, disabled=True, key="LOG")],
         [sg.Button("Pulisci console")],
     ]
 
     global WINDOW
-    WINDOW = sg.Window("Lande Installer & Updater", layout)
+    WINDOW = sg.Window("Lande Installer & Updater", layout, finalize=True, auto_size_text=True, auto_size_buttons=True, keep_on_top=True, resizable=True)
     while True:
         event, values = WINDOW.read()
+        # print(values)
         if event == sg.WIN_CLOSED:
             break
 
         settings["dialog"] = values[0]
         settings["mode"] = values[1]
-        settings["downloads_path"] = values[2]
-        settings["nwnclient_path"] = values[3]
-        settings["nwnclient"] = values[4]
-        settings["nwncx"] = values[5]
+        settings["downloads_path"] = values[3]
+        settings["nwnclient_path"] = values[4]
+        settings["nwnclient"] = values[5]
+        settings["nwncx"] = values[7]
+        settings["verbosity"] = int(values[7])
 
         with open(SETTINGS, "w") as fp:
             json.dump(settings, fp)
@@ -361,6 +375,9 @@ def start(settings: list, dry_run=False):
     install_cx = False
     if settings["nwncx"] == True:
         install_cx = True
+
+    global VERBOSITY
+    VERBOSITY = settings["verbosity"]
 
     try:
         if install_client and not dry_run:
