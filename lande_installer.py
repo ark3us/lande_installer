@@ -10,11 +10,11 @@
 
 import io
 import logging
-from PySimpleGUI.PySimpleGUI import Column, VerticalSeparator
 import mega
 import os
 import requests
 import patoolib
+import pkg_resources
 import PySimpleGUI as sg
 import shutil
 import simplejson as json
@@ -23,18 +23,21 @@ import tempfile
 import threading
 import traceback
 import wget
+import webbrowser
 from bs4 import BeautifulSoup
-from typing import Text, Tuple, Dict
+from typing import Text, Tuple, Dict, List
 
+VERSION = "v2.5"
 SETTINGS = "settings.json"
 VERBOSITY = 1
+RELEASE_URL = "https://api.github.com/repos/ark3us/lande_installer/releases/latest"
+UPDATE_URL = "https://github.com/ark3us/lande_installer/releases/latest"
 BASE_URL = "http://5.9.105.28"
 NWNCLIENT_URL = "http://5.9.105.28/customdownload/client/NWNclient.zip"
 NWNCX_URL = "https://mega.nz/file/x1g2TA4J#BFB2U9fRx0N8LqlEA5133Rhlxx7k0DYukCQWotLm3no"
 SCRIPT_PATH = os.path.dirname(os.path.realpath(__file__))
 MAIN_PATH = os.path.join(SCRIPT_PATH, "NWNclient")
 DOWNLOAD_PATH = os.path.join(SCRIPT_PATH, "downloads")
-DOWNLOAD_OLD = os.path.join(DOWNLOAD_PATH, "old")
 ALLOWED_ARCHIVES = [
     "zip",
     "7z"
@@ -45,6 +48,7 @@ SKIP = [
 ]
 ERROR_FLAG = False
 THREAD_EVENT = "LOG"
+POPUP_EVENT = "POPUP"
 WINDOW = None
 
 def get_paths() -> Dict[str, str]:
@@ -61,9 +65,14 @@ def get_paths() -> Dict[str, str]:
 
 def print_log(*argv, level=1):
     print(*argv)
-
     if VERBOSITY >= level and WINDOW:
         WINDOW.write_event_value(THREAD_EVENT, (" ".join(argv),))
+
+
+def popup(msg: str):
+    print(msg)
+    if WINDOW:
+        WINDOW.write_event_value(POPUP_EVENT, (msg,))
 
 
 def set_error():
@@ -129,7 +138,7 @@ def download(url: str, archive_path: str) -> bool:
     print_log("Scaricando %s -> %s ..." % (url, archive_path))
     try:
         if os.path.exists(archive_path):
-            shutil.move(archive_path, os.path.join(DOWNLOAD_OLD, os.path.basename(archive_path)))
+            os.remove(archive_path)
 
         if "mega.nz" in url:
             m = mega.Mega()
@@ -175,7 +184,8 @@ def install(archive_path: str, dest_path: str) -> bool:
         shutil.rmtree(tmp_dir)
 
 
-def install_haks(soup: BeautifulSoup, force=False, dry_run=False):
+def install_haks(soup: BeautifulSoup, force=False, dry_run=False, baseline=False) -> int:
+    updates = 0
     for a in soup.findAll("a"):
         href = a.get("href")
         if not href:
@@ -207,21 +217,29 @@ def install_haks(soup: BeautifulSoup, force=False, dry_run=False):
         
         if not is_installed or not os.path.exists(archive_path):
             if dry_run:
-                print_log("Richiesto download e installazione dell'archivio:", href)
-                continue
+                if baseline:
+                    print_log("Richiesto salvataggio metadati:", href)
+                else:
+                    print_log("Richiesto download e installazione dell'archivio:", href)
+                updates += 1
             elif not download(href, archive_path):
                 print_log("Errore nello scaricamento dell'archivio: %s" % href)
                 break
 
-        if not install(archive_path, dest_path):
-            print_log("Errore nell'installazione dell'archivio: %s" % href)
-            break
+        if not dry_run:
+            if not install(archive_path, dest_path):
+                print_log("Errore nell'installazione dell'archivio: %s" % href)
+                break
+            updates += 1
             
-        print_log("Salvo i metadati", level=2)
-        save_info(archive_path, info)
-        if os.path.exists(archive_path):
-            print_log("Elimino l'archivio", level=2)
-            os.remove(archive_path)
+        if not dry_run or baseline:
+            print_log("Salvo i metadati", level=2)
+            save_info(archive_path, info)
+            if os.path.exists(archive_path):
+                print_log("Elimino l'archivio", level=2)
+                os.remove(archive_path)
+
+    return updates
 
 
 def install_nwnclient(force=False):
@@ -253,15 +271,25 @@ def install_nwncx(force=False):
     return install(archive_path, MAIN_PATH)
 
 
+def check_self_update() -> List[str]:
+    res = requests.get(RELEASE_URL)
+    ver = res.json().get("tag_name", "")
+    assets = res.json().get("assets", {})
+    ass = []
+    if pkg_resources.parse_version(ver) > pkg_resources.parse_version(VERSION):
+        print("Trovata nuova versione:", ver)
+        for asset in assets:
+            ass.append(asset.get("browser_download_url"))
+    else:
+        print("Hai già l'ultima versione dell'app")
+
+    return ass
+
+
 def main():
     logging.basicConfig(filename='error.log',level=logging.INFO)
 
-    for _, val in get_paths().items():
-        if not os.path.exists(val):
-            os.makedirs(val)
-
-    if not os.path.exists(DOWNLOAD_OLD):
-        os.makedirs(DOWNLOAD_OLD)
+    assets = check_self_update()
 
     settings = {
         "dialog": "Italiano",
@@ -281,8 +309,11 @@ def main():
             print_log("Errore nell'apertura del file di configurazione.")
             os.remove(SETTINGS)
 
-    sg.theme("DarkAmber")
+    for _, val in get_paths().items():
+        if not os.path.exists(val):
+            os.makedirs(val)
 
+    sg.theme("DarkAmber")
 
     col1 = [
         [sg.Text("--- Dialog ---")],
@@ -293,6 +324,9 @@ def main():
         [sg.Text("Modalità (re)installazione: (re)installa tutto <- scegliere in caso di prima installazione")],
         [sg.Text("Modalità:"), sg.DropDown(["Update", "(Re)Installazione"], default_value=settings["mode"])],
         [sg.Text("")],
+        [sg.Text("--- Sincronizzazione ---")],
+        [sg.Text("Se è la prima volta che usi questa applicazione e hai già tutto installato,")],
+        [sg.Text("allora utilizza questa funzione per sincronizzare i contenuti: "), sg.Button("Sincronizza")],
     ]
 
     col2 = [
@@ -310,9 +344,17 @@ def main():
         [sg.Text("")],
     ]
 
+    upd_row = []
+    if assets:
+        upd_row = [
+            [sg.Text("E' disponibile una nuova versione dell'app: ", text_color="red"), sg.Button("Scarica")],
+        ]
+
     layout = [
+        [sg.Column(upd_row, justification="center")],
         [sg.Column(col1), sg.VerticalSeparator(), sg.Column(col2)],
-        [sg.Button("Controlla stato"), sg.Button("Inizia update!")],
+        [sg.Text("")],
+        [sg.Column([[sg.Button("Controlla aggiornamenti"), sg.Button("Inizia update!")]], justification="center")],
         [sg.Text("")],
         [sg.Text("--- Log ---    "), sg.Text("Verbosità: "), sg.DropDown(["1", "2"], size=(3, 1), default_value="1")],
         [sg.Multiline(size=(150, 20), autoscroll=True, disabled=True, key="LOG")],
@@ -340,21 +382,30 @@ def main():
 
         if event == THREAD_EVENT:
             WINDOW["LOG"].print(values[THREAD_EVENT][0])
+        elif event == POPUP_EVENT:
+            sg.Popup(values[POPUP_EVENT][0], keep_on_top=True )
         elif event == "Inizia update!":
             WINDOW["LOG"]("")
             th = threading.Thread(target=start, args=(settings,))
             th.daemon = True
             th.start()
-        elif event == "Controlla stato":
+        elif event == "Controlla aggiornamenti":
             WINDOW["LOG"]("")
             th = threading.Thread(target=start, args=(settings, True,))
             th.daemon = True
             th.start()
+        elif event == "Sincronizza":
+            WINDOW["LOG"]("")
+            th = threading.Thread(target=start, args=(settings, True, True, ))
+            th.daemon = True
+            th.start()
+        elif event == "Scarica":
+            webbrowser.open_new_tab(UPDATE_URL)
         elif event == "Pulisci console":
             WINDOW["LOG"]("")
 
 
-def start(settings: list, dry_run=False):
+def start(settings: list, dry_run=False, baseline=False):
     res = requests.get(BASE_URL)
     soup = BeautifulSoup(res.content, features="html.parser")
 
@@ -370,6 +421,9 @@ def start(settings: list, dry_run=False):
 
     global DOWNLOAD_PATH
     DOWNLOAD_PATH = settings["downloads_path"]
+
+    if not os.path.exists(DOWNLOAD_PATH):
+        os.makedirs(DOWNLOAD_PATH)
 
     global MAIN_PATH
     MAIN_PATH = settings["nwnclient_path"]
@@ -389,7 +443,12 @@ def start(settings: list, dry_run=False):
         if install_client and not dry_run:
             install_nwnclient(reinstall)
         
-        install_haks(soup, force=reinstall, dry_run=dry_run)
+        updates = install_haks(soup, force=reinstall, dry_run=dry_run, baseline=baseline)
+        if not baseline:
+            if dry_run:
+                popup("Update disponibili: %s" % updates)
+            else:
+                popup("Update installati: %s" % updates)
         
         if install_cx and not dry_run:
             install_nwncx(reinstall)
