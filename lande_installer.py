@@ -1,3 +1,5 @@
+#!/bin/env python3
+
 '''
     File name: lande_installer.py
     Author: ark3us
@@ -5,6 +7,7 @@
     Date last modified: 10/04/2020
     Python Version: 3.8
 '''
+
 import io
 import logging
 from PySimpleGUI.PySimpleGUI import Column, VerticalSeparator
@@ -21,7 +24,7 @@ import threading
 import traceback
 import wget
 from bs4 import BeautifulSoup
-from typing import Text, Tuple
+from typing import Text, Tuple, Dict
 
 SETTINGS = "settings.json"
 VERBOSITY = 1
@@ -30,14 +33,6 @@ NWNCLIENT_URL = "http://5.9.105.28/customdownload/client/NWNclient.zip"
 NWNCX_URL = "https://mega.nz/file/x1g2TA4J#BFB2U9fRx0N8LqlEA5133Rhlxx7k0DYukCQWotLm3no"
 SCRIPT_PATH = os.path.dirname(os.path.realpath(__file__))
 MAIN_PATH = os.path.join(SCRIPT_PATH, "NWNclient")
-SUBPATHS = {
-    "dialog": MAIN_PATH,
-    "hak": os.path.join(MAIN_PATH, "hak"),
-    "override": os.path.join(MAIN_PATH, "override"),
-    "tlk": os.path.join(MAIN_PATH, "tlk"),
-    "portraits": os.path.join(MAIN_PATH, "portraits"),
-    "music": os.path.join(MAIN_PATH, "music"),
-}
 DOWNLOAD_PATH = os.path.join(SCRIPT_PATH, "downloads")
 DOWNLOAD_OLD = os.path.join(DOWNLOAD_PATH, "old")
 ALLOWED_ARCHIVES = [
@@ -51,6 +46,17 @@ SKIP = [
 ERROR_FLAG = False
 THREAD_EVENT = "LOG"
 WINDOW = None
+
+def get_paths() -> Dict[str, str]:
+    subpaths = {
+        "dialog": MAIN_PATH,
+        "hak": os.path.join(MAIN_PATH, "hak"),
+        "override": os.path.join(MAIN_PATH, "override"),
+        "tlk": os.path.join(MAIN_PATH, "tlk"),
+        "portraits": os.path.join(MAIN_PATH, "portraits"),
+        "music": os.path.join(MAIN_PATH, "music"),
+    }
+    return subpaths
 
 
 def print_log(*argv, level=1):
@@ -140,7 +146,7 @@ def download(url: str, archive_path: str) -> bool:
 
 def get_dest_path(url: str) -> str:
     subpath = None
-    for key, val in SUBPATHS.items():
+    for key, val in get_paths().items():
         if key in url:
             subpath = val
             break
@@ -250,7 +256,7 @@ def install_nwncx(force=False):
 def main():
     logging.basicConfig(filename='error.log',level=logging.INFO)
 
-    for _, val in SUBPATHS.items():
+    for _, val in get_paths().items():
         if not os.path.exists(val):
             os.makedirs(val)
 
@@ -297,7 +303,7 @@ def main():
         [sg.Text("--- NWN client ---")],
         [sg.Text("Directory dove è installato o dove installare il client NWN:")],
         [sg.InputText(settings["nwnclient_path"]), sg.FolderBrowse()],
-        [sg.Checkbox("Installare il client NWN?")],
+        [sg.Checkbox(" Installare il client NWN?")],
         [sg.Text("")],
         [sg.Text("--- NWNCX ---")],
         [sg.Checkbox(" Installare NWNCX?", default=settings["nwncx"])],
@@ -314,7 +320,7 @@ def main():
     ]
 
     global WINDOW
-    WINDOW = sg.Window("Lande Installer & Updater", layout, finalize=True, auto_size_text=True, auto_size_buttons=True, keep_on_top=True, resizable=True)
+    WINDOW = sg.Window("Lande Installer & Updater", layout, finalize=True, auto_size_text=True, auto_size_buttons=True, resizable=True)
     while True:
         event, values = WINDOW.read()
         # print(values)
