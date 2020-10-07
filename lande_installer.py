@@ -28,7 +28,7 @@ import webbrowser
 from bs4 import BeautifulSoup
 from typing import Text, Tuple, Dict, List
 
-VERSION = "v2.5"
+VERSION = "v2.6"
 SETTINGS = "settings.json"
 VERBOSITY = 1
 RELEASE_URL = "https://api.github.com/repos/ark3us/lande_installer/releases/latest"
