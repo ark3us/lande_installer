@@ -1,4 +1,4 @@
-#!/bin/env python3
+#!env python3
 
 '''
     File name: lande_installer.py

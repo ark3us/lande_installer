@@ -5,3 +5,5 @@ patool
 wget
 pyinstaller
 pysimplegui
+python-dateutil
+simplejson
